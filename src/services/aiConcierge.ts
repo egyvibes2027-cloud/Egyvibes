@@ -12,32 +12,36 @@ export interface AiChatMessage {
   id: string;
   role: 'user' | 'assistant';
   text: string;
+  provider?: 'gemini' | 'offline';
+  model?: string;
+  followUps?: string[];
   suggestedPlan?: {
     label: string;
     citySlugs: string[];
     landmarkIds?: string[];
+    airportCode?: string;
+    nights?: number;
+    starTier?: 3 | 4 | 5 | 7;
+    travelMode?: 'group' | 'private';
   };
 }
 
 /**
  * AI Concierge Adapter Configuration
- * Plug in your LLM backend endpoint and API key via `.env`:
- *   VITE_AI_API_URL=https://your-api.example/v1/chat
- *   VITE_AI_API_KEY=sk-...
+ * Uses local Vite server middleware (`/api/concierge`) backed by GEMINI_API_KEY in `.env.local`,
+ * or an optional external endpoint override via `VITE_AI_API_URL`.
  */
 export const AI_CONCIERGE_CONFIG = {
-  endpoint: import.meta.env.VITE_AI_API_URL || '',
+  endpoint: import.meta.env.VITE_AI_API_URL || '/api/concierge',
   apiKey: import.meta.env.VITE_AI_API_KEY || '',
 };
 
-export async function askEgyptAiConcierge(
+export async function streamEgyptAiConcierge(
   prompt: string,
   history: AiChatMessage[],
-  lang: LanguageCode = 'en'
+  lang: LanguageCode = 'en',
+  onDelta: (delta: string) => void
 ): Promise<Omit<AiChatMessage, 'id' | 'role'>> {
-  const t = TRANSLATIONS[lang];
-
-  // 1. If a real backend endpoint is configured, call it directly
   if (AI_CONCIERGE_CONFIG.endpoint) {
     try {
       const res = await fetch(AI_CONCIERGE_CONFIG.endpoint, {
@@ -51,7 +55,108 @@ export async function askEgyptAiConcierge(
         body: JSON.stringify({
           message: prompt,
           language: lang,
-          history: history.slice(-6).map((m) => ({ role: m.role, content: m.text })),
+          stream: true,
+          history: history.slice(-8).map((m) => ({ role: m.role, content: m.text })),
+          context: {
+            currency: 'USD',
+            paymentTerms: '25% on arrival, 75% on departure',
+          },
+        }),
+      });
+
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('text/event-stream') && res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        let fullVisible = '';
+        let finalMeta: Partial<Omit<AiChatMessage, 'id' | 'role'>> = { provider: 'gemini' };
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+
+          const lines = buf.split('\n');
+          buf = lines.pop() ?? '';
+
+          for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line.startsWith('data:')) continue;
+            const jsonStr = line.slice(5).trim();
+            if (!jsonStr) continue;
+            try {
+              const ev = JSON.parse(jsonStr);
+              if (typeof ev.delta === 'string' && ev.delta.length > 0) {
+                fullVisible += ev.delta;
+                onDelta(ev.delta);
+              }
+              if (ev.done) {
+                finalMeta = {
+                  text: typeof ev.reply === 'string' && ev.reply.trim() ? ev.reply.trim() : fullVisible,
+                  suggestedPlan: ev.suggestedPlan,
+                  followUps: Array.isArray(ev.followUps) ? ev.followUps : undefined,
+                  provider: ev.provider || 'gemini',
+                  model: ev.model,
+                };
+              }
+            } catch {
+              // ignore partial SSE chunk
+            }
+          }
+        }
+
+        return {
+          text: finalMeta.text || fullVisible || TRANSLATIONS[lang].aiWelcomeMessage,
+          suggestedPlan: finalMeta.suggestedPlan,
+          followUps: finalMeta.followUps,
+          provider: finalMeta.provider || 'gemini',
+          model: finalMeta.model,
+        };
+      }
+
+      if (res.ok) {
+        const data = await res.json();
+        const text = data.reply || data.text || data.message || TRANSLATIONS[lang].aiWelcomeMessage;
+        onDelta(text);
+        return {
+          text,
+          suggestedPlan: data.suggestedPlan,
+          followUps: Array.isArray(data.followUps) ? data.followUps : undefined,
+          provider: data.provider || 'gemini',
+          model: data.model,
+        };
+      }
+    } catch {
+      // Fall back cleanly to offline dataset concierge
+    }
+  }
+
+  return askEgyptAiConcierge(prompt, history, lang);
+}
+
+export async function askEgyptAiConcierge(
+  prompt: string,
+  history: AiChatMessage[],
+  lang: LanguageCode = 'en'
+): Promise<Omit<AiChatMessage, 'id' | 'role'>> {
+  const t = TRANSLATIONS[lang];
+
+  // 1. Call Gemini API middleware / configured backend endpoint
+  if (AI_CONCIERGE_CONFIG.endpoint) {
+    try {
+      const res = await fetch(AI_CONCIERGE_CONFIG.endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(AI_CONCIERGE_CONFIG.apiKey
+            ? { Authorization: `Bearer ${AI_CONCIERGE_CONFIG.apiKey}` }
+            : {}),
+        },
+        body: JSON.stringify({
+          message: prompt,
+          language: lang,
+          history: history.slice(-8).map((m) => ({ role: m.role, content: m.text })),
           context: {
             currency: 'USD',
             paymentTerms: '25% on arrival, 75% on departure',
@@ -63,6 +168,9 @@ export async function askEgyptAiConcierge(
         return {
           text: data.reply || data.text || data.message || t.aiWelcomeMessage,
           suggestedPlan: data.suggestedPlan,
+          followUps: Array.isArray(data.followUps) ? data.followUps : undefined,
+          provider: data.provider || 'gemini',
+          model: data.model,
         };
       }
     } catch {

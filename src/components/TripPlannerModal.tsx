@@ -5,12 +5,17 @@ import {
   Car,
   Check,
   ChevronDown,
+  Compass,
   Copy,
+  Crown,
   Minus,
+  Palmtree,
   Plane,
   Plus,
   Send,
+  SlidersHorizontal,
   Star,
+  Sun,
   UserCheck,
   Users,
   X,
@@ -27,8 +32,8 @@ import {
   TOP_10_LANDMARKS,
 } from '../data/egyptData';
 import { useLanguage } from '../context/LanguageContext';
-import { localizeCityName, type AirportCode } from '../i18n/translations';
-import { askEgyptAiConcierge, type AiChatMessage } from '../services/aiConcierge';
+import { localizeCityName, type AirportCode, type LanguageCode } from '../i18n/translations';
+import { streamEgyptAiConcierge, type AiChatMessage } from '../services/aiConcierge';
 import { AiStarIcon, NileWayLogo } from './Icons';
 
 interface TripPlannerModalProps {
@@ -42,6 +47,134 @@ interface TripPlannerModalProps {
 }
 
 const TOTAL_STEPS = 7; // Steps 0..6 + Confirmation screen
+
+function renderFormattedText(text: string): React.ReactNode {
+  const renderInline = (lineText: string) => {
+    const parts = lineText.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g);
+    return parts.map((part, pIdx) => {
+      if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
+        return <strong key={pIdx}>{part.slice(2, -2)}</strong>;
+      }
+      if (part.startsWith('*') && part.endsWith('*') && part.length > 2) {
+        return <strong key={pIdx}>{part.slice(1, -1)}</strong>;
+      }
+      return <React.Fragment key={pIdx}>{part}</React.Fragment>;
+    });
+  };
+
+  return text.split('\n').map((rawLine, lineIdx) => {
+    const trimmed = rawLine.trim();
+    if (/^-{3,}$/.test(trimmed)) {
+      return (
+        <hr
+          key={lineIdx}
+          style={{
+            border: 'none',
+            borderTop: '1px solid var(--color-outline-variant)',
+            margin: '8px 0',
+          }}
+        />
+      );
+    }
+    const headingMatch = trimmed.match(/^#{1,4}\s+(.+)$/);
+    if (headingMatch) {
+      return (
+        <div key={lineIdx} style={{ fontWeight: 700, color: 'var(--color-primary)', marginTop: lineIdx > 0 ? 8 : 0, marginBottom: 2 }}>
+          {renderInline(headingMatch[1])}
+        </div>
+      );
+    }
+    const bulletMatch = trimmed.match(/^(?:[-*•])\s+(.+)$/);
+    if (bulletMatch) {
+      return (
+        <div key={lineIdx} style={{ paddingInlineStart: 12, textIndent: -10 }}>
+          {'• '}
+          {renderInline(bulletMatch[1])}
+        </div>
+      );
+    }
+    return (
+      <React.Fragment key={lineIdx}>
+        {lineIdx > 0 && <br />}
+        {renderInline(rawLine)}
+      </React.Fragment>
+    );
+  });
+}
+
+interface StarterCard {
+  id: string;
+  title: string;
+  subtitle: string;
+  prompt: string;
+  icon: 'pharaoh' | 'oasis' | 'sea' | 'royal';
+}
+
+function getStarterCards(lang: LanguageCode, t: ReturnType<typeof useLanguage>['t']): StarterCard[] {
+  if (lang === 'ar') {
+    return [
+      {
+        id: 'pharaohs',
+        icon: 'pharaoh',
+        title: 'الكلاسيكيات الخالدة',
+        subtitle: 'الأهرامات، المتحف الكبير، والأقصر وأسوان',
+        prompt: 'خطط لي رحلة 6 ليالٍ كلاسيكية بين القاهرة والأقصر وأسوان تشمل أهرامات الجيزة والمتحف الكبير ومعبد الكرنك مع التفاصيل بالدولار',
+      },
+      {
+        id: 'oases',
+        icon: 'oasis',
+        title: 'أسرار سيوة والصحراء البيضاء',
+        subtitle: 'بحيرات الملح، سفاري وتخييم تحت النجوم',
+        prompt: 'عايز برنامج 4 ليالٍ للكنوز المخفية في واحة سيوة والصحراء البيضاء والفيوم بعيداً عن الزحام بالسعر بالدولار',
+      },
+      {
+        id: 'sea',
+        icon: 'sea',
+        title: 'البحر الأحمر ودهب',
+        subtitle: 'شعاب مرجانية، وادي الوشواش وغروب سيناء',
+        prompt: 'رشح لي رحلة 5 ليالٍ في شرم الشيخ ودهب والغردقة للغوص والاسترخاء بفندق 4 أو 5 نجوم بالدولار',
+      },
+      {
+        id: 'royal',
+        icon: 'royal',
+        title: 'تجربة مصر الملكية 7★',
+        subtitle: 'سانت ريجيس، أولد كتراكت ومرشد خاص',
+        prompt: 'صمم لي برنامج VIP ملكي 7 نجوم لمدة 7 ليالٍ بين القاهرة والأقصر وأسوان بسيارة خاصة ومرشد أثري مرخص',
+      },
+    ];
+  }
+
+  return [
+    {
+      id: 'pharaohs',
+      icon: 'pharaoh',
+      title: `${t.cityNames['cairo-giza']} & ${t.cityNames.luxor}`,
+      subtitle: 'Pyramids, GEM Museum & Nile temples',
+      prompt: 'Plan a 6-night classic Egypt route covering Cairo & Giza, Luxor, and Aswan with official 2026 USD breakdown.',
+    },
+    {
+      id: 'oases',
+      icon: 'oasis',
+      title: `${t.cityNames.siwa} & ${t.cityNames['white-desert']}`,
+      subtitle: 'Salt lakes, dunes & Sahara stargazing',
+      prompt: 'Create a 4-night uncrowded hidden gems trip to Siwa Oasis, Wadi El-Hitan Fayoum, and White Desert in USD.',
+    },
+    {
+      id: 'sea',
+      icon: 'sea',
+      title: `${t.cityNames['sharm-el-sheikh']} & ${t.cityNames.hurghada}`,
+      subtitle: 'Coral reefs, Dahab canyons & beaches',
+      prompt: 'Design a 5-night Red Sea escape in Sharm El Sheikh, Dahab, and Hurghada with airport pickup and transparent USD pricing.',
+    },
+    {
+      id: 'royal',
+      icon: 'royal',
+      title: t.plannerTiers.t7,
+      subtitle: 'Old Cataract, St. Regis & private Egyptologist',
+      prompt: 'Curate a 7-night ultra-luxury 7-star Egypt itinerary in Cairo, Luxor, and Aswan with private car and licensed Egyptologist.',
+    },
+  ];
+}
 
 export const TripPlannerModal: React.FC<TripPlannerModalProps> = ({
   initialMode = 'manual',
@@ -59,36 +192,12 @@ export const TripPlannerModal: React.FC<TripPlannerModalProps> = ({
   // Embedded AI Concierge State
   const [aiInput, setAiInput] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
-  const [aiMessages, setAiMessages] = useState<AiChatMessage[]>(() => [
-    {
-      id: 'welcome',
-      role: 'assistant',
-      text: t.aiWelcomeMessage,
-      suggestedPlan: {
-        label: t.aiSuggestedClassicLabel,
-        citySlugs: ['cairo-giza', 'luxor', 'aswan'],
-        landmarkIds: ['giza-pyramids', 'grand-egyptian-museum', 'valley-of-kings'],
-      },
-    },
-  ]);
-
-  useEffect(() => {
-    setAiMessages((prev) =>
-      prev.map((m) =>
-        m.id === 'welcome'
-          ? {
-              ...m,
-              text: t.aiWelcomeMessage,
-              suggestedPlan: m.suggestedPlan
-                ? { ...m.suggestedPlan, label: t.aiSuggestedClassicLabel }
-                : undefined,
-            }
-          : m
-      )
-    );
-  }, [lang, t]);
+  const [streamingText, setStreamingText] = useState('');
+  const [aiMessages, setAiMessages] = useState<AiChatMessage[]>([]);
+  const starterCards = useMemo(() => getStarterCards(lang, t), [lang, t]);
 
   const aiScrollRef = useRef<HTMLDivElement>(null);
+  const aiInputRef = useRef<HTMLInputElement>(null);
   const sentInitialPromptRef = useRef<string | undefined>(undefined);
 
   // Step 0: Arrival Airport & Multi-City Selection
@@ -155,7 +264,13 @@ export const TripPlannerModal: React.FC<TripPlannerModalProps> = ({
     if (aiScrollRef.current && panelMode === 'ai') {
       aiScrollRef.current.scrollTop = aiScrollRef.current.scrollHeight;
     }
-  }, [aiMessages, panelMode]);
+  }, [aiMessages, streamingText, aiLoading, panelMode]);
+
+  useEffect(() => {
+    if (panelMode === 'ai') {
+      setTimeout(() => aiInputRef.current?.focus(), 60);
+    }
+  }, [panelMode]);
 
   const handleAiSend = async (textOverride?: string) => {
     const q = (textOverride ?? aiInput).trim();
@@ -164,8 +279,12 @@ export const TripPlannerModal: React.FC<TripPlannerModalProps> = ({
     const nextHistory = [...aiMessages, userMsg];
     setAiMessages(nextHistory);
     if (!textOverride) setAiInput('');
+    setStreamingText('');
     setAiLoading(true);
-    const reply = await askEgyptAiConcierge(q, nextHistory, lang);
+    const reply = await streamEgyptAiConcierge(q, nextHistory, lang, (chunk) => {
+      setStreamingText((prev) => prev + chunk);
+    });
+    setStreamingText('');
     setAiMessages((prev) => [
       ...prev,
       {
@@ -173,6 +292,9 @@ export const TripPlannerModal: React.FC<TripPlannerModalProps> = ({
         role: 'assistant',
         text: reply.text,
         suggestedPlan: reply.suggestedPlan,
+        followUps: reply.followUps,
+        provider: reply.provider ?? 'offline',
+        model: reply.model,
       },
     ]);
     setAiLoading(false);
@@ -436,14 +558,28 @@ export const TripPlannerModal: React.FC<TripPlannerModalProps> = ({
             </span>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <button
-                type="button"
-                className={`planner-ai-toggle ${panelMode === 'ai' ? 'active' : ''}`}
-                onClick={() => setPanelMode((prev) => (prev === 'ai' ? 'manual' : 'ai'))}
-              >
-                <AiStarIcon size={16} />
-                <span>{panelMode === 'ai' ? t.plannerManualMode : t.plannerAskAi}</span>
-              </button>
+              <div className="planner-mode-switch" role="tablist" aria-label="Planner mode">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={panelMode === 'ai'}
+                  className={`planner-mode-tab ${panelMode === 'ai' ? 'active' : ''}`}
+                  onClick={() => setPanelMode('ai')}
+                >
+                  <AiStarIcon size={14} />
+                  <span>{t.plannerAskAi}</span>
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={panelMode === 'manual'}
+                  className={`planner-mode-tab ${panelMode === 'manual' ? 'active' : ''}`}
+                  onClick={() => setPanelMode('manual')}
+                >
+                  <SlidersHorizontal size={14} />
+                  <span>{t.plannerManualMode}</span>
+                </button>
+              </div>
               <button
                 type="button"
                 aria-label={t.modalClose}
@@ -466,112 +602,156 @@ export const TripPlannerModal: React.FC<TripPlannerModalProps> = ({
           {panelMode === 'ai' ? (
             <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
               <div
-                style={{
-                  padding: '12px 24px',
-                  background: 'var(--color-surface-container-low)',
-                  borderBottom: '1px solid var(--color-outline-variant)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 10,
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ color: 'var(--color-primary)', display: 'inline-flex' }}>
-                    <AiStarIcon size={18} />
-                  </span>
-                  <div>
-                    <div className="tl-title-sm">{t.aiConciergeBtn}</div>
-                    <div className="tl-body-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
-                      {t.aiSubtitle}
-                    </div>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="tl-label-sm"
-                  style={{ color: 'var(--color-primary)', textDecoration: 'underline' }}
-                  onClick={() => setPanelMode('manual')}
-                >
-                  {t.plannerManualMode}
-                </button>
-              </div>
-
-              <div
                 ref={aiScrollRef}
                 style={{
                   flex: 1,
                   minHeight: 0,
                   overflowY: 'auto',
-                  padding: '18px 24px',
+                  padding: '20px 24px',
                   display: 'flex',
                   flexDirection: 'column',
-                  gap: 12,
+                  gap: 14,
                 }}
               >
-                {aiMessages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`ai-msg-bubble ${msg.role}`}
-                    style={{ whiteSpace: 'pre-line' }}
-                  >
-                    <div>{msg.text}</div>
-                    {msg.suggestedPlan && (
-                      <button
-                        type="button"
-                        className="tl-btn-primary"
-                        style={{ marginTop: 10, height: 34, padding: '0 14px', fontSize: 13 }}
-                        onClick={() => {
-                          if (msg.suggestedPlan!.citySlugs.length > 0) {
-                            setSelectedCities(msg.suggestedPlan!.citySlugs);
-                          }
-                          if (msg.suggestedPlan!.landmarkIds && msg.suggestedPlan!.landmarkIds.length > 0) {
-                            setSelectedPlaces(msg.suggestedPlan!.landmarkIds);
-                          }
-                          setConfirmed(false);
-                          setStep(0);
-                          setPanelMode('manual');
-                        }}
-                      >
-                        {msg.suggestedPlan.label}
-                      </button>
-                    )}
-                  </div>
-                ))}
-                {aiLoading && (
-                  <div className="ai-msg-bubble assistant" style={{ opacity: 0.75 }}>
-                    {t.aiThinking}
+                {aiMessages.length === 0 && !aiLoading && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 4 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--color-primary)' }}>
+                        <span
+                          style={{
+                            width: 30,
+                            height: 30,
+                            borderRadius: '50%',
+                            background: 'var(--color-secondary-container)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          <AiStarIcon size={16} />
+                        </span>
+                        <span className="tl-title-md">{t.aiConciergeBtn}</span>
+                      </div>
+                      <p className="tl-body-md" style={{ color: 'var(--color-on-surface-variant)' }}>
+                        {t.aiWelcomeMessage}
+                      </p>
+                    </div>
+
+                    <div className="ai-starter-grid">
+                      {starterCards.map((card) => (
+                        <button
+                          key={card.id}
+                          type="button"
+                          className="ai-starter-card"
+                          onClick={() => handleAiSend(card.prompt)}
+                        >
+                          <span className="ai-starter-icon">
+                            {card.icon === 'pharaoh' && <Compass size={16} />}
+                            {card.icon === 'oasis' && <Sun size={16} />}
+                            {card.icon === 'sea' && <Palmtree size={16} />}
+                            {card.icon === 'royal' && <Crown size={16} />}
+                          </span>
+                          <div>
+                            <div className="tl-title-sm">{card.title}</div>
+                            <div
+                              className="tl-body-sm"
+                              style={{ color: 'var(--color-on-surface-variant)', marginTop: 2 }}
+                            >
+                              {card.subtitle}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 )}
-              </div>
 
-              <div
-                style={{
-                  padding: '10px 24px',
-                  borderTop: '1px solid var(--color-outline-variant)',
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  gap: 6,
-                  background: 'var(--color-surface-container-low)',
-                }}
-              >
-                {t.aiQuickChips.map((chip) => (
-                  <button
-                    key={chip}
-                    type="button"
-                    onClick={() => handleAiSend(chip)}
-                    style={{
-                      padding: '5px 12px',
-                      borderRadius: 9999,
-                      border: '1px solid var(--color-outline-variant)',
-                      background: '#fff',
-                      fontSize: 12,
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {chip}
-                  </button>
-                ))}
+                {aiMessages.map((msg, idx) => {
+                  const isLastAssistant =
+                    msg.role === 'assistant' && idx === aiMessages.length - 1 && !aiLoading;
+                  return (
+                    <div
+                      key={msg.id}
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                      }}
+                    >
+                      <div className={`ai-msg-bubble ${msg.role}`} dir="auto">
+                        <div>{renderFormattedText(msg.text)}</div>
+                        {msg.suggestedPlan && (
+                          <button
+                            type="button"
+                            className="tl-btn-primary"
+                            style={{ marginTop: 10, height: 36, padding: '0 16px', fontSize: 13 }}
+                            onClick={() => {
+                              const plan = msg.suggestedPlan!;
+                              const nextCities = plan.citySlugs.length > 0 ? plan.citySlugs : selectedCities;
+                              if (plan.citySlugs.length > 0) {
+                                setSelectedCities(nextCities);
+                              }
+                              if (plan.landmarkIds && plan.landmarkIds.length > 0) {
+                                setSelectedPlaces(plan.landmarkIds);
+                              }
+                              if (plan.airportCode) {
+                                setAirportCode(plan.airportCode);
+                              }
+                              if (typeof plan.nights === 'number') {
+                                setNights(Math.max(2, Math.min(25, Math.round(plan.nights))));
+                              }
+                              if (plan.starTier) {
+                                setStarTier(plan.starTier);
+                                const autoHotels = PARTNER_HOTELS.filter(
+                                  (h) => nextCities.includes(h.citySlug) && h.stars === plan.starTier
+                                ).map((h) => h.id);
+                                if (autoHotels.length > 0) {
+                                  setSelectedHotelIds(autoHotels);
+                                }
+                              }
+                              if (plan.travelMode) {
+                                setTravelMode(plan.travelMode);
+                              }
+                              setConfirmed(false);
+                              setStep(0);
+                              setPanelMode('manual');
+                            }}
+                          >
+                            {msg.suggestedPlan.label}
+                          </button>
+                        )}
+                      </div>
+                      {isLastAssistant && msg.followUps && msg.followUps.length > 0 && (
+                        <div className="ai-followup-row">
+                          {msg.followUps.map((qText) => (
+                            <button
+                              key={qText}
+                              type="button"
+                              className="ai-followup-chip"
+                              onClick={() => handleAiSend(qText)}
+                            >
+                              {qText}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {aiLoading && (
+                  <div className="ai-msg-bubble assistant" dir="auto">
+                    {streamingText ? (
+                      <div>{renderFormattedText(streamingText)}</div>
+                    ) : (
+                      <div className="ai-typing-dots" aria-label={t.aiThinking}>
+                        <span />
+                        <span />
+                        <span />
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <form
@@ -580,26 +760,28 @@ export const TripPlannerModal: React.FC<TripPlannerModalProps> = ({
                   handleAiSend();
                 }}
                 style={{
-                  padding: '12px 24px',
+                  padding: '12px 24px 16px',
                   borderTop: '1px solid var(--color-outline-variant)',
                   display: 'flex',
                   gap: 10,
-                  background: '#fff',
+                  background: '#ffffff',
                 }}
               >
                 <input
+                  ref={aiInputRef}
                   type="text"
                   className="funnel-input"
                   placeholder={t.aiInputPlaceholder}
                   value={aiInput}
                   onChange={(e) => setAiInput(e.target.value)}
-                  style={{ flex: 1, borderRadius: 9999, padding: '0 16px' }}
+                  style={{ flex: 1, borderRadius: 9999, padding: '0 18px', height: 44 }}
                 />
                 <button
                   type="submit"
                   className="tl-btn-primary"
                   aria-label={t.aiConciergeBtn}
-                  style={{ width: 42, height: 42, padding: 0 }}
+                  disabled={aiLoading || !aiInput.trim()}
+                  style={{ width: 44, height: 44, padding: 0, flexShrink: 0 }}
                 >
                   <Send size={16} />
                 </button>
@@ -1264,21 +1446,6 @@ export const TripPlannerModal: React.FC<TripPlannerModalProps> = ({
             )}
           </div>
           )}
-
-          <div
-            style={{
-              background: 'var(--color-surface-container)',
-              padding: '10px 16px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 24,
-            }}
-          >
-            <img src="/assets/logos/forbes.svg" alt="Forbes" width={68} height={18} style={{ objectFit: 'contain' }} />
-            <img src="/assets/logos/bbb-a-rating.svg" alt="Accredited" width={88} height={34} style={{ objectFit: 'contain', filter: 'grayscale(1) sepia(0.32) brightness(0.88)' }} />
-            <img src="/assets/logos/asta.png" alt="Travel Advisors" width={82} height={34} style={{ objectFit: 'contain', filter: 'grayscale(1) sepia(0.32) brightness(0.88)' }} />
-          </div>
         </div>
       </div>
     </div>

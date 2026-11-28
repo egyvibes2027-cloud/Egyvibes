@@ -14,7 +14,7 @@ export const AiConcierge: React.FC<AiConciergeProps> = ({
   onToggle,
   onApplySuggestedPlan,
 }) => {
-  const { t } = useLanguage();
+  const { lang, t } = useLanguage();
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [messages, setMessages] = useState<AiChatMessage[]>([
@@ -53,7 +53,7 @@ export const AiConcierge: React.FC<AiConciergeProps> = ({
     if (!textOverride) setInput('');
     setLoading(true);
 
-    const reply = await askEgyptAiConcierge(q, nextHistory);
+    const reply = await askEgyptAiConcierge(q, nextHistory, lang);
     setMessages((prev) => [
       ...prev,
       {
